@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <script
+            crossorigin="anonymous"
+            integrity="sha512-Nn+fuByx+JZOUDYVLmCWg4lySybBp9KMI8NpUzkD/69HcondNJ6MZE9jxv8qDPCTyIK+kEzy7QDSZcYOy6KmfA=="
+            src="https://lib.baomitu.com/eventemitter3/4.0.7/index.min.js"
+        ></script>
+        <script src="streamsaver.js"></script>
+        <script src="zip-stream.js"></script>
+        <title>Document</title>
+        <style>
+            html,
+            body {
+                margin: 0;
+                padding: 0;
+            }
+            .frbox {
+                overflow: hidden;
+                width: 100vw;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="frbox">
+            <iframe src="about:blank" style="width: 3600px; height: 1080px" frameborder="0"></iframe>
+        </div>
+        <div class="a">
+            <input type="number" value="60" id="fps" />fps <br />
+            <input type="number" value="30" id="time" />s <br />
+            <button onclick="start()" id="realtimerec">realtime rec</button>
+            <button onclick="startpf()" id="perframerec">perframe sequence</button>
+            <div class="results"></div>
+        </div>
+        <div class="b">
+            <button onclick="swFrame()" class="swframe">auto frame</button>
+            <button onclick="ev.emit('tick')" class="swtick">tick</button>
+        </div>
+    </body>
+    <script>
+        const ev = new EventEmitter();
+
+        const iframe = document.querySelector('iframe');
+        const frbox = document.querySelector('.frbox');
+        const fwidth = (3600 / window.devicePixelRatio) * 1.111;
+        const fheight = (1080 / window.devicePixelRatio) * 1.111;
+        const fscale = document.body.offsetWidth / fwidth;
+        frbox.style.height = fheight * fscale + 'px';
+        iframe.style.width = fwidth + 'px';
+        iframe.style.height = fheight + 'px';
+        iframe.style.transform = `scale(${fscale})`;
+        iframe.style.transformOrigin = '0 0';
+        iframe.src = 'game.html' + location.search;
+        const fw = iframe.contentWindow;
+        function record(canvas, time, fps) {
+            var recordedChunks = [];
+            return new Promise(function (res, rej) {
+                var stream = canvas.captureStream(fps || 30 /*fps*/);
+                mediaRecorder = new MediaRecorder(stream, {
+                    mimeType: 'video/webm;codecs=h264',
+                });
+                mediaRecorder.start(time || 4000);
+                mediaRecorder.ondataavailable = function (event) {
+                    recordedChunks.push(event.data);
+                    // after stop `dataavilable` event run one more time
+                    if (mediaRecorder.state === 'recording') {
+                        mediaRecorder.stop();
+                    }
+                };
+                mediaRecorder.onstop = function (event) {
+                    var blob = new Blob(recordedChunks, { type: 'video/webm' });
+                    var url = URL.createObjectURL(blob);
+                    console.log(blob, url);
+                    res(url);
+                };
+            });
+        }
+        async function start() {
+            const rbtn = document.querySelector('#realtimerec');
+            const canvas = fw.document.getElementById('webglCanvas');
+            const fps = document.getElementById('fps').value;
+            const time = document.getElementById('time').value * 1000;
+            rbtn.disabled = true;
+            const url = await record(canvas, time, fps);
+            const results = document.querySelector('.results');
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = Date.now() + '.webm';
+            a.innerText = a.download;
+            const div = document.createElement('div');
+            div.appendChild(a);
+            results.appendChild(div);
+            rbtn.disabled = false;
+        }
+        let fwTime = performance.now();
+        function swFrame() {
+            const swframe = document.querySelector('.swframe');
+            swframe.innerText = swframe.innerText === 'auto frame' ? 'manual frame' : 'auto frame';
+            const isManual = swframe.innerText === 'manual frame';
+            if (isManual) {
+                fw._requestAnimationFrame = fw.requestAnimationFrame;
+                fw._now = fw.performance.now;
+                fw.Date._now = fw.Date.now;
+                fw.Date.prototype._getTime = fw.Date.prototype.getTime;
+                fw._manualFrame = true
+                fwTime = performance.now();
+                fw.requestAnimationFrame = function (callback) {
+                    ev.once('tick', () => {
+                        const fps = document.getElementById('fps').value;
+                        fwTime += 1000 / fps;
+                        callback(fwTime);
+                    });
+                };
+                fw.performance.now = function () {
+                    return fwTime;
+                };
+                fw.Date.now = function () {
+                    return fwTime;
+                };
+                fw.Date.prototype.getTime = function () {
+                    return fwTime;
+                };
+            } else {
+                fw.requestAnimationFrame = fw._requestAnimationFrame;
+                fw._requestAnimationFrame = null;
+                fw.performance.now = fw._now;
+                fw.Date.now = fw._now;
+                fw.Date.prototype.getTime = fw.Date.prototype._getTime
+                fw._manualFrame = false;
+                ev.emit('tick');
+            }
+        }
+        function startpf() {
+            const swframe = document.querySelector('.swframe');
+            const isManual = swframe.innerText === 'manual frame';
+            const canvas = fw.document.getElementById('webglCanvas');
+            if (!isManual) {
+                swFrame();
+            }
+            const fps = document.getElementById('fps').value;
+            const time = document.getElementById('time').value;
+            const loop = fps * time;
+            const fileStream = streamSaver.createWriteStream(Date.now() + '.zip');
+            const swtick = document.querySelector('.swtick');
+            swtick.disabled = true;
+            const readableZipStream = new ZIP({
+                async start(ctrl) {
+                    for (let i = 0; i < loop; i++) {
+                        ev.emit('tick');
+                        // await new Promise((res) => setTimeout(res, 100 / fps));
+                        const blob = await new Promise((res, rej) => {
+                            canvas.toBlob(res, 'image/jpeg', 100);
+                        });
+                        const file = new File([blob], i + '.jpg', {
+                            type: 'image/jpeg',
+                        });
+                        ctrl.enqueue(file);
+                        swtick.innerText = `${i + 1}/${loop}`;
+                    }
+                    ctrl.close();
+                    swtick.innerText = 'tick';
+                    swtick.disabled = false;
+                    if (!isManual) {
+                        swFrame();
+                    }
+                },
+            });
+            if (window.WritableStream && readableZipStream.pipeTo) {
+                return readableZipStream.pipeTo(fileStream).then(() => console.log('done writing'));
+            }
+            const writer = fileStream.getWriter();
+            const reader = readableZipStream.getReader();
+            const pump = () =>
+                reader.read().then((res) => (res.done ? writer.close() : writer.write(res.value).then(pump)));
+            pump();
+        }
+    </script>
+</html>
